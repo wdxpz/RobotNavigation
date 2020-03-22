@@ -16,7 +16,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 '''
 import threading
 import time
-from queue import Queue
+import copy
+from Queue import Queue
 from math import atan2
 
 import rospy
@@ -41,6 +42,8 @@ robot_status = {
     }
 pose_queue = Queue(maxsize=0)
 lock = threading.Lock()
+running_flag = threading.Event()
+running_flag.set()
 
 def resetRbotStatus(waypoint_no=None):
     robot_status['route_point_no'] = waypoint_no
@@ -50,8 +53,11 @@ def resetRbotStatus(waypoint_no=None):
     robot_status['leave_time'] = 0
 
 def readPose(msg):
+    global original_pose
+
     if original_pose is None:
         original_pose = msg.pose.pose
+        rospy.loginfo('readPose: find start pose: {}'.format(original_pose))
     pose_record = {
         'pose': msg.pose.pose,
         'time': time.time()   #TODO: check if there is time is msg
@@ -64,12 +70,16 @@ def analyzePose():
     global cur_y
     global cur_theta
 
-    while True:
+    while running_flag.isSet():
+        if pose_queue is None:
+            rospy.loginfo('analyzePose: main process exit! exit')
+            return
+
         if pose_queue.empty():
             continue
         pose_record = pose_queue.get()
         pose_pos = pose_record['pose']
-        pose_time = pose_record['time']
+        # pose_time = pose_record['time']
 
         cur_x = pose_pos.position.x
         cur_y = pose_pos.position.y
@@ -77,10 +87,10 @@ def analyzePose():
         rot_q = pose_pos.orientation
         (_,_,cur_theta) = euler_from_quaternion ([rot_q.x,rot_q.y,rot_q.z,rot_q.w])
 
-        rospy.loginfo("current position: x-{}, y-{}, theta-{}".format(cur_x, cur_y, cur_theta))
+        # rospy.loginfo("current position: x-{}, y-{}, theta-{}".format(cur_x, cur_y, cur_theta))
         
         #robot not started or already leave from current waypoint
-        if robot_status['waypoint_no'] is None or robot_status['leave_time']!=0:
+        if robot_status['route_point_no'] is None or robot_status['leave_time']!=0:
             continue
 
         # if lock.locked():
@@ -91,6 +101,7 @@ def analyzePose():
         if (cur_time - robot_status['enter_time']) > config.Holding_Time or \
             distance(robot_status['holding_pos'], (cur_x, cur_y, cur_theta)) > config.Valid_Range_Radius:
             robot_status['leave_time'] = cur_time
+            rospy.loginfo('ananlyzePose: find leave waypoint time, the record of current waypoint is: \n {}'.format(robot_status))
 
             #send out the status record and reset it
             t = threading.Thread(target=upload, args=(robot_status,))
@@ -99,8 +110,13 @@ def analyzePose():
             resetRbotStatus()
         lock.release()
     
-def runRoute(route: list):
+def runRoute(route):
 
+    if type(route) != list:
+        raise TypeError('runRoute() required param route in type: list')
+
+    if len(route) == 0:
+        rospy.loginfo('runRoute: route point list is empty, return!')
     try:
         # Initialize
         rospy.init_node('follow_route', anonymous=False)
@@ -109,15 +125,22 @@ def runRoute(route: list):
         odom_sub = rospy.Subscriber("/odom", Odometry, readPose)
         t = threading.Thread(target=analyzePose, args=())
         t.start()
-        
+
+        # time.sleep(10)
+        # odom_sub.unregister()py
+        # return
+
         #prepare navigation route to make robot return to original position after the job
         ##add reversed point list and original robot pos into the route
-        full_route = route.copy()
+        full_route = copy.deepcopy(route)
         route_len = len(route)
-        for pt in route[::-1]:
-            pt['point_no'] *= -1
+        return_index = range(2, route_len+1)
+        return_index.reverse()
+        for pt, index in zip(route[:-1][::-1], return_index):
+            pt['point_no'] = index*-1
             full_route.append(pt)
-        pt['point_no'] = 0
+        pt = copy.deepcopy(route[0])
+        pt['point_no'] = -1
         if original_pose is None:
             pt['position']['x'], pt['position']['y'] = 0, 0
             pt['quaternion']['r1'], pt['quaternion']['r2'], \
@@ -132,6 +155,7 @@ def runRoute(route: list):
                                                                   original_pose.orientation.z, \
                                                                   original_pose.orientation.w
         full_route.append(pt)
+        rospy.loginfo('runRoute: full route: \n {}'.format(full_route))
         
 
         #start navigation
@@ -139,6 +163,7 @@ def runRoute(route: list):
         for index, pt in enumerate(full_route, start=1):
 
             if rospy.is_shutdown():
+                running_flag.clear()
                 break
 
             pt_num = pt['point_no']
@@ -156,6 +181,7 @@ def runRoute(route: list):
                 continue
 
             #TODO: commend to robot to rotate 360 degree at current place 
+            time.sleep(config.Holding_Time)
 
             if robot_status['route_point_no'] is not None:
                 #the route point was reached already
@@ -167,6 +193,7 @@ def runRoute(route: list):
             (_, _, pt_theta) = euler_from_quaternion ([pt['quaternion']['r1'], pt['quaternion']['r2'], pt['quaternion']['r3'],  pt['quaternion']['r4']])
             robot_status['route_point_pos'] = (pt['position']['x'], pt['position']['y'], pt_theta)
             robot_status['holding_pos'] = (cur_x, cur_y, cur_theta)
+            rospy.loginfo('runRoute: arrive at a waypoint,  the record of current waypoint is: \n {}'.format(robot_status))
             lock.release()
 
             #this guarantee to send the parameters out
@@ -174,11 +201,17 @@ def runRoute(route: list):
 
         #to make the analyzePose thread finished after unsubscribe the odom topic
         odom_sub.unregister()
+        running_flag.clear()
+        pose_queue = None
+        rospy.loginfo('runRoute: finished route, unregister topic odom!')
 
     except rospy.ROSInterruptException:
+        running_flag.clear()
+        pose_queue = None
+        odom_sub.unregister()
         rospy.loginfo("Ctrl-C caught. Quitting")
 
-if __name__ == 'main':
+if __name__ == '__main__':
         # Read information from yaml file
     with open("route.yaml", 'r') as stream:
         dataMap = yaml.load(stream)
