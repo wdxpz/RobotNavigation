@@ -1,5 +1,5 @@
-## Install ROS
-# 网络时间协议(NTP，Network Time Protocol)
+# Install ROS
+## 网络时间协议(NTP，Network Time Protocol)
 * 设置方法是安装chrony之后用ntpdate命令指定ntp服务器即 可。
 * 这样一来会表示服务器和当前计算机之间的时间误差，进而会调到服务器的时间。这 就是通过给不同的PC指定相同的NTP服务器，将时间误差缩短到最小的方法。
 
@@ -7,13 +7,13 @@
 $ sudo apt-get install -y chrony ntpdate 
 $ sudo ntpdate -q ntp.ubuntu.com
 ```
-# **change ROS apt source
+## change ROS apt source
 ```
 sudo sh -c '. /etc/lsb-release && echo "deb http://mirrors.ustc.edu.cn/ros/ubuntu/ $DISTRIB_CODENAME main" > /etc/apt/sources.list.d/ros-latest.list'
 ```
 then, follow official guides to install ROS
 
-# change default python from 2 to 3
+## change default python from 2 to 3
 **seems not good to change python 2 to 3 because ROS catkin_make uses cmake binded with python2, once the system default python is changed to python3, catkin_make will not work**
 ```
 update-alternatives --remove python /usr/bin/python2
@@ -242,6 +242,10 @@ def callback(self,data):
     * [move to a specific point in the map](https://learn.turtlebot.com/2015/02/01/14/), see [code](https://github.com/markwsilliman/turtlebot/blob/master/go_to_specific_point_on_map.py)
     * [move the robot along a route, and execute task at each point](https://learn.turtlebot.com/2015/02/04/5/), see [code](https://github.com/markwsilliman/turtlebot/blob/master/follow_the_route.py)
     * [get the battery status](https://learn.turtlebot.com/2015/02/01/16/), see [code](https://github.com/markwsilliman/turtlebot/blob/master/kobuki_battery.py)
+    
+## rotate robot 
+1. how to rotate a specific relative angle, refer [How to rotate a robot to a desired heading using feedback from odometry](https://www.theconstructsim.com/ros-qa-135-how-to-rotate-a-robot-to-a-desired-heading-using-feedback-from-odometry/), **not rely on current pose value**
+2. how to rotate by angle speed, refer to [Rotating Left/Right](http://wiki.ros.org/turtlesim/Tutorials/Rotating%20Left%20and%20Right) **rely on current pose value**
 
 # Development
 ## Hosts
@@ -326,3 +330,28 @@ Type "help", "copyright", "credits" or "license" for more information.
 
     ```
 
+
+# Navigation Tune
+## initial pose estimation 
+in `turtlebot3_navigation/launch/amcl.launch.xml`
+```
+<!-- 它在初始位置估计中被用作为高斯分布的初始x坐标值。--> 
+<arg name="initial_pose_x" default="0.0"/>
+<!-- 它在初始位置估计中被用作为高斯分布的初始y坐标值。--> 
+<arg name="initial_pose_y" default="0.0"/>
+<!-- 它在初始位置估计中被用作为高斯分布的初始yaw坐标值。--> 
+<arg name="initial_pose_a" default="0.0"/>
+
+<!-- 执行滤波器更新之前所需的平移运动(以米为单位) -->
+<param name="update_min_d" value="0.2"/>
+<!-- 执行滤波器更新之前所需的旋转运动(以弧度表示) -->
+<param name="update_min_a" value="0.2"/>
+```
+## obstacle estimation
+in `turtlebot3_navigation/param/costmap_common_params_burger.yaml` or `turtlebot3_navigation/param/costmap_common_params_waffle.yaml`
+```
+# 当物体与机器人的距离在如下距离内时，将物体视为障碍物。
+obstacle_range: 2.5
+# 传感器值大于如下距离的数据被视为自由空间(freespace)。
+raytrace_range: 3.5
+```

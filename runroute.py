@@ -27,6 +27,7 @@ from geometry_msgs.msg import Point, Twist
 import yaml
 
 from gotopos import GoToPose
+from rotate import RotateController, PI
 from utils import distance, upload
 import config
 
@@ -35,10 +36,14 @@ cur_x, cur_y, cur_theta = 0, 0, 0
 robot_status = {
     'id': config.RobotID,
     'route_point_no': None,
-    'route_point_pos': (0, 0, 0),
-    'holding_pos': (0, 0, 0),
-    'enter_time': 0,
-    'leave_time': 0
+    'route_point_pos': (0, 0), #(x, y)
+    'holding_pos': (0, 0), #(x, y)
+    #for element in 'enter', 'stay', 'leave', it will be {angle: timestamp}
+    #'enter' and leave' will have only 1 element
+    #'stay' will have sevel elements
+    'enter': {},
+    'stay': [],             
+    'leave': {}
     }
 pose_queue = Queue(maxsize=0)
 lock = threading.Lock()
@@ -47,10 +52,11 @@ running_flag.set()
 
 def resetRbotStatus(waypoint_no=None):
     robot_status['route_point_no'] = waypoint_no
-    robot_status['route_point_pos'] = (0, 0, 0)
-    robot_status['holding_pos'] = (0, 0, 0)
-    robot_status['enter_time'] = 0
-    robot_status['leave_time'] = 0
+    robot_status['route_point_pos'] = (0, 0)
+    robot_status['holding_pos'] = (0, 0)
+    robot_status['enter'] = {}
+    robot_status['stay'] = []
+    robot_status['leave'] = {}
 
 def readPose(msg):
     global original_pose
@@ -77,6 +83,9 @@ def analyzePose():
 
         if pose_queue.empty():
             continue
+
+        cur_time = time.time()
+
         pose_record = pose_queue.get()
         pose_pos = pose_record['pose']
         # pose_time = pose_record['time']
@@ -89,18 +98,16 @@ def analyzePose():
 
         # rospy.loginfo("current position: x-{}, y-{}, theta-{}".format(cur_x, cur_y, cur_theta))
         
-        #robot not started or already leave from current waypoint
+        #robot not arrive at a point or already leave a point
         if robot_status['route_point_no'] is None or robot_status['leave_time']!=0:
             continue
 
-        # if lock.locked():
-        #     continue
-
-        lock.acquire()
-        cur_time = time.time()
-        if (cur_time - robot_status['enter_time']) > config.Holding_Time or \
+        #tell if robot leave current point
+        if (cur_time - robot_status['enter_time']) > (config.Holding_Time) or \
             distance(robot_status['holding_pos'], (cur_x, cur_y, cur_theta)) > config.Valid_Range_Radius:
-            robot_status['leave_time'] = cur_time
+            
+            lock.acquire()
+            robot_status['leave'] = (cur_theta, cur_time)
             rospy.loginfo('ananlyzePose: find leave waypoint time, the record of current waypoint is: \n {}'.format(robot_status))
 
             #send out the status record and reset it
@@ -108,7 +115,51 @@ def analyzePose():
             t.start()
 
             resetRbotStatus()
+
+            lock.release()
+
+            continue
+
+    #now, the robot should be staying at the point, we record its different angle position
+    if len(robot_status['stay']) > (config.Circle_Rotate_Steps-1):
+        #no need to reocord the last rotation restuls, becuase it will be same as robot_status['leave']]
+        continue
+    pre_direction = robot_status['enter'][0] if len(robot_status['stay'])==0 else robot_status['stay'][-1][0]
+    angle_var = abs(cur_theta-pre_direction)*180/PI
+    if angle_var > (360/config.Circle_Rotate_Steps):
+        lock.acquire()
+        robot_status['stay'].append((cur_theta, cur_time)) 
         lock.release()
+
+def buildFullRoute(route, original_pose):
+    #prepare navigation route to make robot return to original position after the job
+    ##add reversed point list and original robot pos into the route
+    full_route = copy.deepcopy(route)
+    route_len = len(route)
+    return_index = range(2, route_len+1)
+    return_index.reverse()
+    for pt, index in zip(route[:-1][::-1], return_index):
+        pt['point_no'] = index*-1
+        full_route.append(pt)
+    pt = copy.deepcopy(route[0])
+    pt['point_no'] = -1
+    if original_pose is None:
+        pt['position']['x'], pt['position']['y'] = 0, 0
+        pt['quaternion']['r1'], pt['quaternion']['r2'], \
+            pt['quaternion']['r3'],  pt['quaternion']['r4'] = 0, 0, 0, 1
+    else:
+        #TODO: for multirobots,
+        # it will be better to obtain robot's original pos from server at the beginning
+        pt['position']['x'], pt['position']['y'] = original_pose.position.x, original_pose.position.y
+        pt['quaternion']['r1'], pt['quaternion']['r2'], \
+            pt['quaternion']['r3'],  pt['quaternion']['r4'] = original_pose.orientation.x, \
+                                                                  original_pose.orientation.y, \
+                                                                  original_pose.orientation.z, \
+                                                                  original_pose.orientation.w
+    full_route.append(pt)
+    rospy.loginfo('runRoute: full route: \n {}'.format(full_route))
+
+    return full_route
     
 def runRoute(route):
 
@@ -126,38 +177,14 @@ def runRoute(route):
         t = threading.Thread(target=analyzePose, args=())
         t.start()
 
-        # time.sleep(10)
-        # odom_sub.unregister()py
-        # return
-
-        #prepare navigation route to make robot return to original position after the job
-        ##add reversed point list and original robot pos into the route
-        full_route = copy.deepcopy(route)
-        route_len = len(route)
-        return_index = range(2, route_len+1)
-        return_index.reverse()
-        for pt, index in zip(route[:-1][::-1], return_index):
-            pt['point_no'] = index*-1
-            full_route.append(pt)
-        pt = copy.deepcopy(route[0])
-        pt['point_no'] = -1
-        if original_pose is None:
-            pt['position']['x'], pt['position']['y'] = 0, 0
-            pt['quaternion']['r1'], pt['quaternion']['r2'], \
-                pt['quaternion']['r3'],  pt['quaternion']['r4'] = 0, 0, 0, 1
-        else:
-            #TODO: for multirobots,
-            # it will be better to obtain robot's original pos from server at the beginning
-            pt['position']['x'], pt['position']['y'] = original_pose.position.x, original_pose.position.y
-            pt['quaternion']['r1'], pt['quaternion']['r2'], \
-                pt['quaternion']['r3'],  pt['quaternion']['r4'] = original_pose.orientation.x, \
-                                                                  original_pose.orientation.y, \
-                                                                  original_pose.orientation.z, \
-                                                                  original_pose.orientation.w
-        full_route.append(pt)
-        rospy.loginfo('runRoute: full route: \n {}'.format(full_route))
+        #init the rotate controller
+        rotate_ctl =  RotateController()
         
 
+        #build the full route to make the robot return to its original position
+        full_route = buildFullRoute(route, original_pose)
+        route_len = len(route)
+        
         #start navigation
         navigator = GoToPose()
         for index, pt in enumerate(full_route, start=1):
@@ -176,25 +203,21 @@ def runRoute(route):
                 continue
             rospy.loginfo("Reached No. {} pose".format(pt_num))
 
-            if index > route_len:
+            if index > route_len or robot_status['route_point_no'] is not None:
                 # returning route
-                continue
+                # or the route point was reached already
+                continue    
+ 
+            #write point enter information
+            writeEnterEvent(pt_num, pt)
 
-            #TODO: commend to robot to rotate 360 degree at current place 
-            time.sleep(config.Holding_Time)
+            #commend to robot to rotate 360 degree at current place
+            step_angle = 360*1.0 / config.Circle_Rotate_Steps
+            for i in range(1, config.Circle_Rotate_Steps+1):
+                rospy.loginfo('runRoute: rotate step {}, rotate angle: {}'.format(i, step_angle))
+                rotate_ctl.rotate(angle=step_angle, speed=config.Rotate_Speed)
+                rospy.sleep(config.Holding_Step_Time/config.Circle_Rotate_Steps)
 
-            if robot_status['route_point_no'] is not None:
-                #the route point was reached already
-                continue
-
-            lock.acquire()
-            robot_status['route_point_no'] = pt_num
-            robot_status['enter_time'] = time.time()
-            (_, _, pt_theta) = euler_from_quaternion ([pt['quaternion']['r1'], pt['quaternion']['r2'], pt['quaternion']['r3'],  pt['quaternion']['r4']])
-            robot_status['route_point_pos'] = (pt['position']['x'], pt['position']['y'], pt_theta)
-            robot_status['holding_pos'] = (cur_x, cur_y, cur_theta)
-            rospy.loginfo('runRoute: arrive at a waypoint,  the record of current waypoint is: \n {}'.format(robot_status))
-            lock.release()
 
             #this guarantee to send the parameters out
             rospy.sleep(0.5)
@@ -210,6 +233,15 @@ def runRoute(route):
         pose_queue = None
         odom_sub.unregister()
         rospy.loginfo("Ctrl-C caught. Quitting")
+
+def writeEnterEvent(pt_num, pt):
+    lock.acquire()
+    robot_status['route_point_no'] = pt_num
+    robot_status['enter'] = (cur_theta, time.time())
+    robot_status['route_point_pos'] = (pt['position']['x'], pt['position']['y'])
+    robot_status['holding_pos'] = (cur_x, cur_y)
+    rospy.loginfo('runRoute: arrive at a waypoint,  the record of current waypoint is: \n {}'.format(robot_status))
+    lock.release()
 
 if __name__ == '__main__':
         # Read information from yaml file
