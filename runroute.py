@@ -28,7 +28,7 @@ import yaml
 
 from gotopos import GoToPose
 from rotate import RotateController, PI
-from utils import distance, upload
+from utils import distance, upload, radiou2dgree
 import config
 
 original_pose = None
@@ -95,6 +95,8 @@ def analyzePose():
 
         rot_q = pose_pos.orientation
         (_,_,cur_theta) = euler_from_quaternion ([rot_q.x,rot_q.y,rot_q.z,rot_q.w])
+        #convert form radius to degree
+        cur_theta = radiou2dgree(cur_theta)
 
         # rospy.loginfo("current position: x-{}, y-{}, theta-{}".format(cur_x, cur_y, cur_theta))
         
@@ -120,16 +122,18 @@ def analyzePose():
 
             continue
 
+    ##  for only record the event of robot leaving a waypoint, these angle record will be sent to TSDB
+    ##  by a time based regular process, so we disabled the following codes
     #now, the robot should be staying at the point, we record its different angle position
-    if len(robot_status['stay']) > (config.Circle_Rotate_Steps-1):
-        #no need to reocord the last rotation restuls, becuase it will be same as robot_status['leave']]
-        continue
-    pre_direction = robot_status['enter'][0] if len(robot_status['stay'])==0 else robot_status['stay'][-1][0]
-    angle_var = abs(cur_theta-pre_direction)*180/PI
-    if angle_var > (360/config.Circle_Rotate_Steps):
-        lock.acquire()
-        robot_status['stay'].append((cur_theta, cur_time)) 
-        lock.release()
+    # if len(robot_status['stay']) > (config.Circle_Rotate_Steps-1):
+    #     #no need to reocord the last rotation restuls, becuase it will be same as robot_status['leave']]
+    #     continue
+    # pre_direction = robot_status['enter'][0] if len(robot_status['stay'])==0 else robot_status['stay'][-1][0]
+    # angle_var = radiou2dgree(abs(cur_theta-pre_direction))
+    # if angle_var > (360/config.Circle_Rotate_Steps):
+    #     lock.acquire()
+    #     robot_status['stay'].append((cur_theta, cur_time)) 
+    #     lock.release()
 
 def buildFullRoute(route, original_pose):
     #prepare navigation route to make robot return to original position after the job

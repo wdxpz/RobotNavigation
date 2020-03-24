@@ -247,6 +247,14 @@ def callback(self,data):
 1. how to rotate a specific relative angle, refer [How to rotate a robot to a desired heading using feedback from odometry](https://www.theconstructsim.com/ros-qa-135-how-to-rotate-a-robot-to-a-desired-heading-using-feedback-from-odometry/), **not rely on current pose value**
 2. how to rotate by angle speed, refer to [Rotating Left/Right](http://wiki.ros.org/turtlesim/Tutorials/Rotating%20Left%20and%20Right) **rely on current pose value**
 
+# InfluxDB 
+## install
+```
+sudo apt-get install python-influxdb
+```
+## python examples to manipulate infuxDB
+refer [InfluxDB——python使用手册](https://www.cnblogs.com/huang-yc/p/10500209.html)
+
 # Development
 ## Hosts
 1. Turtlebot remote-pc:
@@ -264,6 +272,7 @@ password: 123456
 ## Install Packages
 1. pip3 install -U rospkg
 2. sudo apt-get install python-requests (python2)
+3. sudo apt-get install python-influxdb
 
 ## launch robot
 1. on master, run `roscore`
