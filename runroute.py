@@ -17,8 +17,10 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 import threading
 import time
 import copy
+import datetime
 from Queue import Queue
 from math import atan2
+from datetime import timedelta
 
 import rospy
 from nav_msgs.msg import Odometry
@@ -26,56 +28,66 @@ from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Point, Twist
 import yaml
 
-from gotopos import GoToPose
-from rotate import RotateController, PI
-from utils import distance, upload, radiou2dgree
 import config
+from turtlebot_control.gotopos import GoToPose
+from turtlebot_control.rotate import RotateController, PI
+from utils.utils import distance, upload, radiou2dgree
+from utils.tsdb import DBHelper
+
+inspection_id = 0
+robot_id = 0
 
 original_pose = None
 cur_x, cur_y, cur_theta = 0, 0, 0
+cur_time, pre_time = 0, 0
 robot_status = {
     'id': config.RobotID,
     'route_point_no': None,
-    'route_point_pos': (0, 0), #(x, y)
-    'holding_pos': (0, 0), #(x, y)
-    #for element in 'enter', 'stay', 'leave', it will be {angle: timestamp}
-    #'enter' and leave' will have only 1 element
-    #'stay' will have sevel elements
-    'enter': {},
-    'stay': [],             
-    'leave': {}
+    'holding_pos': (0, 0), #(x, y, angle)
+    #for element in 'enter', 'stay', 'leave', it will be (angle: timestamp)
+    'enter': (),            
+    'leave': ()
     }
 pose_queue = Queue(maxsize=0)
+#there will be two kinds of records into the post_pose_queue
+# pos_record: (0, x, y, angle, time)
+# event_record: (1, waypoint_no, enter_time, leave_time)
+post_pose_queue = Queue(maxsize =0)
+dbhelper = DBHelper()
 lock = threading.Lock()
 running_flag = threading.Event()
 running_flag.set()
 
 def resetRbotStatus(waypoint_no=None):
     robot_status['route_point_no'] = waypoint_no
-    robot_status['route_point_pos'] = (0, 0)
     robot_status['holding_pos'] = (0, 0)
-    robot_status['enter'] = {}
-    robot_status['stay'] = []
-    robot_status['leave'] = {}
+    robot_status['enter'] = ()
+    robot_status['leave'] = ()
 
 def readPose(msg):
     global original_pose
+    
+    # cur_time =  datetime.datetime.utcnow().isoformat("T")
+    cur_time =  datetime.datetime.utcnow()
 
     if original_pose is None:
         original_pose = msg.pose.pose
         rospy.loginfo('readPose: find start pose: {}'.format(original_pose))
-    pose_record = {
-        'pose': msg.pose.pose,
-        'time': time.time()   #TODO: check if there is time is msg
-    }
+    else:
+        if (cur_time - pre_time).total_seconds<config.Pos_Collect_Interval:
+            return
 
-    pose_queue.put(pose_record)
+    pose_pos = msg.pose.pose
+
+    pose_queue.put((pose_pos, cur_time))
+    
+    pre_time = cure_time
 
 def analyzePose():
     global cur_x
     global cur_y
     global cur_theta
-
+  
     while running_flag.isSet():
         if pose_queue is None:
             rospy.loginfo('analyzePose: main process exit! exit')
@@ -84,56 +96,53 @@ def analyzePose():
         if pose_queue.empty():
             continue
 
-        cur_time = time.time()
-
         pose_record = pose_queue.get()
-        pose_pos = pose_record['pose']
-        # pose_time = pose_record['time']
+        pose_pos, pose_time = pose_record[0], pose_record[1]
 
+        #convert to x, y, angle
         cur_x = pose_pos.position.x
         cur_y = pose_pos.position.y
-
         rot_q = pose_pos.orientation
         (_,_,cur_theta) = euler_from_quaternion ([rot_q.x,rot_q.y,rot_q.z,rot_q.w])
         #convert form radius to degree
         cur_theta = radiou2dgree(cur_theta)
-
         # rospy.loginfo("current position: x-{}, y-{}, theta-{}".format(cur_x, cur_y, cur_theta))
         
+        #put into post_pose_cache for uploading
+        #value at index [0] is to indicate: 0--pos record, 1--event record
+        post_pose_queue.put((0, cur_x, cur_y, cur_theta, pose_time.isoformat("T")))
+
         #robot not arrive at a point or already leave a point
         if robot_status['route_point_no'] is None or robot_status['leave_time']!=0:
             continue
 
         #tell if robot leave current point
-        if (cur_time - robot_status['enter_time']) > (config.Holding_Time) or \
+        if (pose_time - robot_status['enter_time']).total_seconds() > (config.Holding_Time) or \
             distance(robot_status['holding_pos'], (cur_x, cur_y, cur_theta)) > config.Valid_Range_Radius:
             
             lock.acquire()
-            robot_status['leave'] = (cur_theta, cur_time)
+            robot_status['leave'] = (cur_theta, pose_time)
             rospy.loginfo('ananlyzePose: find leave waypoint time, the record of current waypoint is: \n {}'.format(robot_status))
-
-            #send out the status record and reset it
-            t = threading.Thread(target=upload, args=(robot_status,))
-            t.start()
-
+            post_pose_queue.put(1, robot_status['route_point_no'], robot_status['enter'][1].isoformat("T"), robot_status['leave'][1].isoformat("T"))
             resetRbotStatus()
-
             lock.release()
 
             continue
 
-    ##  for only record the event of robot leaving a waypoint, these angle record will be sent to TSDB
-    ##  by a time based regular process, so we disabled the following codes
-    #now, the robot should be staying at the point, we record its different angle position
-    # if len(robot_status['stay']) > (config.Circle_Rotate_Steps-1):
-    #     #no need to reocord the last rotation restuls, becuase it will be same as robot_status['leave']]
-    #     continue
-    # pre_direction = robot_status['enter'][0] if len(robot_status['stay'])==0 else robot_status['stay'][-1][0]
-    # angle_var = radiou2dgree(abs(cur_theta-pre_direction))
-    # if angle_var > (360/config.Circle_Rotate_Steps):
-    #     lock.acquire()
-    #     robot_status['stay'].append((cur_theta, cur_time)) 
-    #     lock.release()
+@tl.job(interval=timedelta(seconds=config.Upload_Interval))
+def uploadCacheData():
+    pos_records = []
+    event_records = []
+
+    while not post_pose_queue.empty():
+        rec = post_pose_queue.get()
+        if rec[0] == 0:
+            pos_records.append(rec[1:])
+        else:
+            event_records.append(rec[1:])
+
+    t = threading.Thread(target=dbhelper.upload, args=(inspection_id, robot_id, pos_records, event_records))
+    t.start()
 
 def buildFullRoute(route, original_pose):
     #prepare navigation route to make robot return to original position after the job
@@ -164,9 +173,29 @@ def buildFullRoute(route, original_pose):
     rospy.loginfo('runRoute: full route: \n {}'.format(full_route))
 
     return full_route
-    
-def runRoute(route):
 
+def writeEnterEvent(pt_num, pt):
+    lock.acquire()
+    robot_status['route_point_no'] = pt_num
+    robot_status['enter'] = (cur_theta, time.time())
+    robot_status['route_point_pos'] = (pt['position']['x'], pt['position']['y'])
+    robot_status['holding_pos'] = (cur_x, cur_y)
+    rospy.loginfo('runRoute: arrive at a waypoint,  the record of current waypoint is: \n {}'.format(robot_status))
+    lock.release()
+
+def clearTasks(odom_sub):
+    odom_sub.unregister()
+    running_flag.clear()
+    tl.stop()
+    
+def runRoute(inspectionid, robotid, route):
+    global inspection_id
+    global robot_id
+
+    inspection_id = inspectionid 
+    robot_id = robotid
+
+    
     if type(route) != list:
         raise TypeError('runRoute() required param route in type: list')
 
@@ -180,11 +209,11 @@ def runRoute(route):
         odom_sub = rospy.Subscriber("/odom", Odometry, readPose)
         t = threading.Thread(target=analyzePose, args=())
         t.start()
+        tl.start(block=True)
 
         #init the rotate controller
         rotate_ctl =  RotateController()
         
-
         #build the full route to make the robot return to its original position
         full_route = buildFullRoute(route, original_pose)
         route_len = len(route)
@@ -194,7 +223,9 @@ def runRoute(route):
         for index, pt in enumerate(full_route, start=1):
 
             if rospy.is_shutdown():
+                odom_sub.unregister()
                 running_flag.clear()
+                tl.stop()
                 break
 
             pt_num = pt['point_no']
@@ -227,25 +258,16 @@ def runRoute(route):
             rospy.sleep(0.5)
 
         #to make the analyzePose thread finished after unsubscribe the odom topic
-        odom_sub.unregister()
-        running_flag.clear()
-        pose_queue = None
+        clearTasks(odom_sub)
         rospy.loginfo('runRoute: finished route, unregister topic odom!')
 
     except rospy.ROSInterruptException:
-        running_flag.clear()
-        pose_queue = None
-        odom_sub.unregister()
+        clearTasks(odom_sub)
         rospy.loginfo("Ctrl-C caught. Quitting")
 
-def writeEnterEvent(pt_num, pt):
-    lock.acquire()
-    robot_status['route_point_no'] = pt_num
-    robot_status['enter'] = (cur_theta, time.time())
-    robot_status['route_point_pos'] = (pt['position']['x'], pt['position']['y'])
-    robot_status['holding_pos'] = (cur_x, cur_y)
-    rospy.loginfo('runRoute: arrive at a waypoint,  the record of current waypoint is: \n {}'.format(robot_status))
-    lock.release()
+
+
+
 
 if __name__ == '__main__':
         # Read information from yaml file
