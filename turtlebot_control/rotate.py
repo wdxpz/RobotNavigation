@@ -1,44 +1,59 @@
+import rospy
 from geometry_msgs.msg import Twist
 
-PI = 3.1415926
+PI = 3.1415926535897
 
 class RotateController():
     def __init__(self):
 
         rospy.on_shutdown(self.shutdown)
 
-        self.rotate_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
+        self.rotate_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
         self.rotate_command =Twist()
 
-    def rotate(angle=90, speed=30, clockwise=True, stay=2):
+    def rotate(self, angle=90, speed=90, clockwise=True, stay=2):
         #Converting from angles to radians
-        angular_speed = speed*2*PI/360
-        relative_angle = angle*2*PI/360
+        angular_speed = 1.0 #speed*PI/180
+        relative_angle = angle*PI/180
 
         #We wont use linear components
-        vel_msg.linear.x=0
-        vel_msg.linear.y=0
-        vel_msg.linear.z=0
-        vel_msg.angular.x = 0
-        vel_msg.angular.y = 0
+        self.rotate_command.linear.x=0
+        self.rotate_command.linear.y=0
+        self.rotate_command.linear.z=0
+        self.rotate_command.angular.x = 0
+        self.rotate_command.angular.y = 0
 
         # Checking if our movement is CW or CCW
         if clockwise:
-            vel_msg.angular.z = -abs(angular_speed)
+            self.rotate_command.angular.z = -abs(angular_speed)
         else:
-            vel_msg.angular.z = abs(angular_speed)
-        # Setting the current time for distance calculus
-        t0 = rospy.Time.now().to_sec()
-        current_angle = 0
+            self.rotate_command.angular.z = abs(angular_speed)
 
-        while(current_angle < relative_angle):
-            velocity_publisher.publish(vel_msg)
-            t1 = rospy.Time.now().to_sec()
-            current_angle = angular_speed*(t1-t0)
+
+        rate = 50
+        r = rospy.Rate(rate)
+        ticks = int(relative_angle*rate)
+        for t in range(ticks):
+            self.rotate_pub.publish(self.rotate_command)
+            r.sleep()
+
+        # # Setting the current time for distance calculus
+        # t0 = rospy.Time.now().to_sec()
+        # current_angle = 0
+
+
+        
+        # while(current_angle < relative_angle):
+        #     print current_angle, relative_angle 
+        #     self.rotate_pub.publish(self.rotate_command)
+        #     rospy.sleep()
+        #     t1 = rospy.Time.now().to_sec()
+        #     current_angle = angular_speed*(t1-t0)
 
         #Forcing our robot to stop
-        vel_msg.angular.z = 0
-        velocity_publisher.publish(vel_msg)
+        print 'send stop rotate command'
+        self.rotate_command.angular.z = 0
+        self.rotate_pub.publish(self.rotate_command)
 
     def shutdown(self):
         rospy.loginfo("Stop")

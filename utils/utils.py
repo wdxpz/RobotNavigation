@@ -1,7 +1,7 @@
 import requests
 import math
 
-from rotate import  PI
+from turtlebot_control.rotate import  PI
 
 def distance(pos1, pos2):
     return math.sqrt(math.pow((pos1[0]-pos2[0]), 2) + math.pow((pos1[1]-pos2[1]), 2))
@@ -20,5 +20,5 @@ def upload(data):
     except requests.exceptions.RequestException as err:
         print ("OOps: Something Else",err, "\n on devices: \n", data)
 
-de radiou2dgree(radius):
+def radiou2dgree(radius):
     return radius*180/PI

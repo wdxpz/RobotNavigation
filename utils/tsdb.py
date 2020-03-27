@@ -55,7 +55,6 @@ class DBHelper():
             records.append(body)
 
         try:
-            print(body_pos)
             self.client.write_points(records)
         except Exception as e:
             print('DB operation: write robot position record error!', e)
@@ -74,18 +73,17 @@ class DBHelper():
             return
 
         for record in event_records:
-            body = copy.deepcopy(body_pos)
+            body = copy.deepcopy(body_event)
             waypoint_no, enter_time, leave_time = record[0], record[1], record[2]
-            body_event['time'] = leave_time
-            body_event['tags']['robot_id'] = robot_id
-            body_event['tags']['inspection_id'] = inspection_id
-            body_event['tags']['waypoint_no'] = waypoint_no
-            body_event['fields']['enter_time'] = enter_time
-            body_event['fields']['leave_time'] = leave_time
+            body['time'] = leave_time
+            body['tags']['robot_id'] = robot_id
+            body['tags']['inspection_id'] = inspection_id
+            body['tags']['waypoint_no'] = waypoint_no
+            body['fields']['enter_time'] = enter_time
+            body['fields']['leave_time'] = leave_time
             records.append(body)
         
         try:
-            print(body_event)
             self.client.write_points(records)
         except:
             print('DB operation: write robot position record error!')
@@ -99,7 +97,9 @@ class DBHelper():
 
     def upload(self, inspection_id, robot_id, pos_records, event_records):
         self.writePosRecord(inspection_id, robot_id, pos_records)
-        self.writePosRecord(inspection_id, robot_id, event_records)
+        print('DBHelper: sent {} pos records'.format(len(pos_records)))
+        self.writeEventRecord(inspection_id, robot_id, event_records)
+        print('DBHelper: sent {} event records'.format(len(event_records)))
 
 
 if __name__ == '__main__':

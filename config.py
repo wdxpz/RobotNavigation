@@ -15,4 +15,4 @@ Table_Name_Robot_Pos = 'robot_poss'
 Table_Name_Robot_Event = 'robot_event'
 
 Pos_Collect_Interval = 0.2
-Upload_Interval = 1
+Upload_Interval = 2
