@@ -49,7 +49,8 @@ robot_status = {
     'enter': (),            
     'leave': ()
     }
-in_returning_way = False # flay to say the robot is in way home, no need to record and analyze data
+flag_arrive_last_checkpoint = False
+flag_in_returning = False # flay to say the robot is in way home, no need to record and analyze data
 pose_queue = Queue(maxsize=0)
 #there will be two kinds of records into the post_pose_queue
 # pos_record: (0, x, y, angle, time)
@@ -71,6 +72,7 @@ def readPose(msg):
     global original_pose
     global cur_time
     global pre_time
+    global flag_in_returning
     
     # cur_time =  datetime.datetime.utcnow().isoformat("T")
     cur_time =  datetime.datetime.utcnow()
@@ -79,8 +81,8 @@ def readPose(msg):
         original_pose = msg.pose.pose
         rospy.loginfo('readPose: find start pose: {}'.format(original_pose))
     else:
-        if in_returning_way:
-            print('readPose: in returning way')
+        if flag_in_returning:
+            # print('readPose: in returning way')
             return
         if (cur_time - pre_time).total_seconds()<config.Pos_Collect_Interval:
             return
@@ -95,6 +97,8 @@ def analyzePose():
     global cur_x
     global cur_y
     global cur_theta
+    global flag_arrive_last_checkpoint
+    global flag_in_returning
   
     while running_flag.isSet():
         if pose_queue is None:
@@ -132,6 +136,9 @@ def analyzePose():
             robot_status['leave'] = (cur_theta, pose_time)
             rospy.loginfo('ananlyzePose: find leave waypoint time, the record of current waypoint is: \n {}'.format(robot_status))
             post_pose_queue.put((1, robot_status['route_point_no'], robot_status['enter'][1].isoformat("T"), robot_status['leave'][1].isoformat("T")))
+            if flag_arrive_last_checkpoint:
+                rospy.loginfo('set in returning flag at leaving the last checkpoint')
+                flag_in_returning = True
             resetRbotStatus()
             lock.release()
 
@@ -199,6 +206,8 @@ def clearTasks(odom_sub):
 def runRoute(inspectionid, robotid, route):
     global inspection_id
     global robot_id
+    global flag_arrive_last_checkpoint
+    global flag_in_returning
 
     inspection_id = inspectionid 
     robot_id = robotid
@@ -238,10 +247,6 @@ def runRoute(inspectionid, robotid, route):
 
             pt_num = pt['point_no']
 
-            if pt_num < 0:
-                print('set in returning flag')
-                in_returning_way = True
-
             # Navigation
             rospy.loginfo("Go to No. {} pose".format(pt_num))
             success = navigator.goto(pt['position'], pt['quaternion'])
@@ -250,9 +255,16 @@ def runRoute(inspectionid, robotid, route):
                 continue
             rospy.loginfo("Reached No. {} pose".format(pt_num))
 
+            if pt_num == route[-1]['point_no']:
+                rospy.loginfo('set flag of arrivging the last checkpoint')
+                flag_arrive_last_checkpoint = True
+
             print('point index {}, route_len {}'.format(index, route_len))
             if index > route_len:
                 # returning route
+                if flag_arrive_last_checkpoint == False:
+                    rospy.loginfo('set in returning flag at first returning point')
+                flag_in_returning = True
                 continue  
 
             if robot_status['route_point_no'] is not None:
