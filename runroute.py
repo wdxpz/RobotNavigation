@@ -223,7 +223,7 @@ def runRoute(inspectionid, robotid, route):
         rospy.init_node('follow_route', anonymous=False)
 
         # start to probe robot's position
-        odom_sub = rospy.Subscriber("/odom", Odometry, readPose)
+        odom_sub = rospy.Subscriber("/tb3_0/odom", Odometry, readPose)
         t = threading.Thread(target=analyzePose, args=())
         t.start()
         tl.start()
@@ -302,4 +302,4 @@ if __name__ == '__main__':
     with open("route.yaml", 'r') as stream:
         dataMap = yaml.load(stream)
 
-    runRoute(1, 'tb3_0', dataMap)
+    runRoute(0, 'no3_0', dataMap)

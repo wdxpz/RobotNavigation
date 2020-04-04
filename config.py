@@ -1,5 +1,5 @@
 RobotID = 'tb3_0'
-Holding_Step_Time = 4
+Holding_Step_Time = 20
 Holding_Time_Variance = 1
 Circle_Rotate_Steps = 4
 Rotate_Speed = 30

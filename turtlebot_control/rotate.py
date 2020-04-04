@@ -8,7 +8,7 @@ class RotateController():
 
         rospy.on_shutdown(self.shutdown)
 
-        self.rotate_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
+        self.rotate_pub = rospy.Publisher('/tb3_0/cmd_vel', Twist, queue_size=10)
         self.rotate_command =Twist()
 
     def rotate(self, angle=90, speed=90, clockwise=True, stay=2):
